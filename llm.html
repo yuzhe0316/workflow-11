@@ -1,0 +1,617 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>SE Workflow 原型 · 设计规格 → 任务分解 → 编排 → 可视化</title>
+<style>
+  * { box-sizing: border-box; }
+  body { margin:0; font-family: "Microsoft YaHei", "PingFang SC", sans-serif; background:#f5f7fa; color:#1f2937; }
+  header { background:#1f3864; color:#fff; padding:12px 20px; display:flex; align-items:baseline; gap:14px; }
+  header h1 { font-size:17px; margin:0; font-weight:600; }
+  header span { font-size:12px; opacity:.85; }
+  .wrap { display:grid; grid-template-columns: 300px 1fr 1fr; gap:12px; padding:12px; height: calc(100vh - 52px); }
+  .card { background:#fff; border:1px solid #dbe3ee; border-radius:8px; display:flex; flex-direction:column; overflow:hidden; }
+  .card h2 { font-size:13px; margin:0; padding:9px 12px; background:#eef3f9; border-bottom:1px solid #dbe3ee; color:#1f3864; font-weight:600; }
+  .card .body { padding:10px 12px; overflow:auto; flex:1; }
+  textarea { width:100%; height:190px; font-family:inherit; font-size:12px; line-height:1.6; padding:8px;
+             border:1px solid #cfd8e3; border-radius:6px; resize:vertical; color:#374151; }
+  .btns { display:flex; flex-wrap:wrap; gap:6px; margin-top:8px; }
+  button { font-family:inherit; font-size:12.5px; padding:7px 12px; border-radius:6px; border:1px solid #2e75b6;
+           background:#2e75b6; color:#fff; cursor:pointer; }
+  button.ghost { background:#fff; color:#1f3864; border-color:#c3d3e6; }
+  button.warn { background:#c0392b; border-color:#c0392b; }
+  button:disabled { opacity:.45; cursor:not-allowed; }
+  table { width:100%; border-collapse:collapse; font-size:12px; }
+  th, td { border-bottom:1px solid #eef1f6; padding:5px 6px; text-align:left; vertical-align:top; }
+  th { color:#5b6b80; font-weight:600; background:#fafcff; position:sticky; top:0; }
+  .tag { display:inline-block; padding:1px 6px; border-radius:10px; font-size:11px; }
+  .s0 { background:#e5e7eb; color:#4b5563; }
+  .s1 { background:#dbeafe; color:#1d4ed8; }
+  .s2 { background:#bfdbfe; color:#1e40af; }
+  .s3 { background:#bbf7d0; color:#15803d; }
+  .s4 { background:#fecaca; color:#b91c1c; }
+  .s5 { background:#fde68a; color:#92400e; }
+  #log { font-size:12px; line-height:1.7; font-family: Consolas, "Microsoft YaHei", monospace; }
+  #log div { border-bottom:1px dashed #eef1f6; padding:2px 0; }
+  .t { color:#94a3b8; }
+  .ok { color:#15803d; } .warnc { color:#b45309; } .errc { color:#b91c1c; }
+  .stat { display:grid; grid-template-columns:repeat(4,1fr); gap:6px; margin-bottom:8px; font-size:12px; }
+  .stat div { background:#f8fafc; border:1px solid #e6ecf4; border-radius:6px; padding:6px 8px; }
+  .stat b { display:block; font-size:16px; color:#1f3864; }
+  svg { width:100%; height:auto; background:#fbfdff; border:1px solid #eef1f6; border-radius:6px; }
+  .hint { font-size:11.5px; color:#6b7280; line-height:1.6; margin-top:6px; }
+  details { margin-top:8px; border:1px solid #e2e8f0; border-radius:6px; padding:6px 10px; background:#fbfdff; }
+  summary { font-size:12.5px; color:#1f3864; cursor:pointer; font-weight:600; }
+  .fields { display:grid; gap:5px; margin-top:8px; }
+  .fields label { font-size:11.5px; color:#4b5563; display:grid; grid-template-columns:64px 1fr; align-items:center; gap:4px; }
+  .fields input, .fields select { font-family:inherit; font-size:11.5px; padding:4px 6px; border:1px solid #cfd8e3;
+             border-radius:5px; width:100%; background:#fff; }
+  #busy { display:none; font-size:12px; color:#b45309; margin-top:6px; }
+  #confirmBar { display:none; background:#fff8e6; border:1px solid #f3d489; padding:8px 10px; border-radius:6px; margin-bottom:8px; font-size:12.5px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>SE Workflow 原型</h1>
+  <span>设计规格 → PM Agent 拆任务 → 编排器排计划 → 可视化执行</span>
+</header>
+
+<div class="wrap">
+  <!-- 左：设计规格 -->
+  <div class="card">
+    <h2>① 输入：设计规格 design spec</h2>
+    <div class="body">
+      <textarea id="spec">项目：校园二手交易小程序（第一版）
+范围：发布商品、浏览商品、下单联系卖家
+功能：
+- 发布商品：填标题、价格、图片，提交后进入审核
+- 浏览商品：列表 + 搜索 + 详情页
+- 下单联系：点"我想要"生成订单占位，展示卖家联系方式
+约束：两周内上线第一版；先做 H5，不接支付；并发量按校园规模估
+验收：三个功能各自能走通，审核和下单有异常提示</textarea>
+      <details id="aiBox" open>
+        <summary>大模型设置（可跳过，默认走规则）</summary>
+        <div class="fields">
+          <label>解析方式
+            <select id="mode">
+              <option value="rule">规则解析（默认，最稳）</option>
+              <option value="llm">调用大模型</option>
+              <option value="mock">模拟模型返回（离线演示）</option>
+            </select>
+          </label>
+          <label>接口地址 <input id="apiBase" value="https://api.deepseek.com/v1"></label>
+          <label>模型名 <input id="apiModel" value="deepseek-chat"></label>
+          <label>API Key <input id="apiKey" type="password" placeholder="sk-... 只存在本页，不写进文件"></label>
+        </div>
+        <div class="hint" style="margin-top:6px">
+          浏览器直接调接口可能被跨域拦（CORS）。被拦了就切“模拟模型返回”，演示效果一样，
+          而且不会因为断网翻车。
+        </div>
+      </details>
+      <div id="busy">正在让模型拆任务…</div>
+      <input type="file" id="specFile" accept=".txt,.md,.json,text/plain" style="display:none">
+      <div class="btns">
+        <button id="btnImport" class="ghost">导入规格文件</button>
+        <button id="btnParse">① PM Agent 拆任务</button>
+        <button id="btnPlan" class="ghost" disabled>② 生成编排</button>
+        <button id="btnReset" class="ghost">重置</button>
+      </div>
+      <div class="hint">
+        三种拆法：<b>规则解析</b>不联网、最快；<b>调用大模型</b>走 OpenAI 兼容接口（填地址/模型/Key）；
+        <b>模拟模型返回</b>用于没网或被跨域拦住的时候，效果一样。<br>
+        上课建议：先规则跑一遍，再切“模拟模型返回”给大家看模型拆出来长什么样。
+      </div>
+    </div>
+  </div>
+
+  <!-- 中：任务与编排 -->
+  <div class="card">
+    <h2>② 任务分解结果 + 编排控制</h2>
+    <div class="body">
+      <div class="stat">
+        <div>任务总数 <b id="cTotal">0</b></div>
+        <div>已完成 <b id="cDone">0</b></div>
+        <div>就绪 <b id="cReady">0</b></div>
+        <div>阻塞 <b id="cBlock">0</b></div>
+      </div>
+      <div id="confirmBar">
+        <b>人工卡点：设计确认（HITL）</b>　编排器已暂停，等人点头。<br>
+        <span style="color:#6b7280">人在这里确认“任务拆得对不对、范围有没有超”，确认后才继续派活。</span>
+        <div class="btns"><button id="btnConfirm">人工确认，继续</button></div>
+      </div>
+      <div class="btns" style="margin-bottom:8px">
+        <button id="btnRun" disabled>③ 开始执行</button>
+        <button id="btnPause" class="ghost" disabled>暂停</button>
+        <button id="btnFault" class="warn" disabled>注入一次异常</button>
+        <button id="btnRetry" class="ghost" disabled>重试阻塞任务</button>
+      </div>
+      <table>
+        <thead><tr><th style="width:52px">编号</th><th>任务</th><th style="width:86px">角色</th><th style="width:64px">前置</th><th style="width:72px">状态</th></tr></thead>
+        <tbody id="taskRows"><tr><td colspan="5" style="color:#9aa7b8">先点“① PM Agent 拆任务”</td></tr></tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- 右：可视化 -->
+  <div class="card">
+    <h2>③ 编排可视化（依赖图 + 事件日志）</h2>
+    <div class="body">
+      <svg id="dag" viewBox="0 0 520 300" preserveAspectRatio="xMidYMid meet"></svg>
+      <div class="hint">灰=没开始　蓝=就绪/在跑　绿=完成　红=阻塞　黄=等人</div>
+      <div id="log" style="margin-top:8px"></div>
+    </div>
+  </div>
+</div>
+
+<script>
+const STATUS = {
+  idle:    { text: "未开始", cls: "s0", color: "#e5e7eb" },
+  ready:   { text: "就绪",   cls: "s1", color: "#dbeafe" },
+  running: { text: "进行中", cls: "s2", color: "#bfdbfe" },
+  done:    { text: "完成",   cls: "s3", color: "#bbf7d0" },
+  blocked: { text: "阻塞",   cls: "s4", color: "#fecaca" },
+  human:   { text: "等人",   cls: "s5", color: "#fde68a" }
+};
+
+let tasks = [];
+let timer = null;
+let running = false;
+let waitingHuman = false;
+let faultUsed = false;
+const CONCURRENCY = 2;
+
+const $ = id => document.getElementById(id);
+
+function now() {
+  const d = new Date();
+  return String(d.getHours()).padStart(2, "0") + ":" + String(d.getMinutes()).padStart(2, "0") +
+         ":" + String(d.getSeconds()).padStart(2, "0");
+}
+
+function log(msg, cls) {
+  const div = document.createElement("div");
+  div.innerHTML = `<span class="t">${now()}</span>  <span class="${cls || ""}">${msg}</span>`;
+  $("log").prepend(div);
+}
+
+/* ---------- ① PM Agent：把设计规格拆成任务 ---------- */
+/* 三种模式：规则 / 真调大模型 / 模拟模型返回（离线） */
+
+const SAMPLE_LLM_JSON = [
+  { "id": "T01", "name": "总体设计：数据模型 + 接口清单", "role": "架构", "deps": [], "priority": 1 },
+  { "id": "T02", "name": "设计确认（人工卡点）", "role": "主持人", "deps": ["T01"], "priority": 2, "kind": "human" },
+  { "id": "T03", "name": "发布商品：接口与表结构", "role": "后端", "deps": ["T01"], "priority": 3 },
+  { "id": "T04", "name": "发布商品：页面与交互", "role": "前端", "deps": ["T03"], "priority": 4 },
+  { "id": "T05", "name": "发布商品：用例与回归测试", "role": "测试", "deps": ["T04"], "priority": 5 },
+  { "id": "T06", "name": "浏览商品：接口与表结构", "role": "后端", "deps": ["T01"], "priority": 3 },
+  { "id": "T07", "name": "浏览商品：页面与交互", "role": "前端", "deps": ["T06"], "priority": 4 },
+  { "id": "T08", "name": "浏览商品：用例与回归测试", "role": "测试", "deps": ["T07"], "priority": 5 },
+  { "id": "T09", "name": "下单联系：接口与表结构", "role": "后端", "deps": ["T01"], "priority": 3 },
+  { "id": "T10", "name": "下单联系：页面与交互", "role": "前端", "deps": ["T09"], "priority": 4 },
+  { "id": "T11", "name": "下单联系：用例与回归测试", "role": "测试", "deps": ["T10"], "priority": 5 },
+  { "id": "T90", "name": "联调：三个功能串起来走一遍", "role": "前端", "deps": ["T05", "T08", "T11"], "priority": 6 },
+  { "id": "T91", "name": "验收清单与上线检查", "role": "产品", "deps": ["T90"], "priority": 7 }
+];
+
+function setBusy(on) {
+  $("busy").style.display = on ? "block" : "none";
+  $("btnParse").disabled = on;
+}
+
+/* 规则解析：读“功能：”下面每一条 */
+function ruleParse() {
+  const lines = $("spec").value.split(/\n/);
+  const features = [];
+  let inFeature = false;
+  for (const raw of lines) {
+    const line = raw.trim();
+    if (/^功能[:：]/.test(line)) { inFeature = true; continue; }
+    if (/^(约束|验收|范围|项目)[:：]/.test(line)) { inFeature = false; continue; }
+    if (inFeature && /^[-·•]/.test(line)) {
+      const name = line.replace(/^[-·•]\s*/, "").split(/[:：]/)[0].trim();
+      if (name) features.push(name);
+    }
+  }
+  if (!features.length) features = ["发布商品", "浏览商品", "下单联系"];
+
+  const out = [];
+  const push = (id, name, role, deps, prio, kind) =>
+    out.push({ id, name, role, deps, prio, kind: kind || "auto" });
+
+  push("T01", "总体设计：数据模型 + 接口清单", "架构", [], 1);
+  push("T02", "设计确认（人工卡点）", "主持人", ["T01"], 2, "human");
+
+  let idx = 3;
+  features.slice(0, 4).forEach(f => {
+    const a = "T" + String(idx++).padStart(2, "0");
+    const b = "T" + String(idx++).padStart(2, "0");
+    const c = "T" + String(idx++).padStart(2, "0");
+    push(a, `${f}：接口与表结构`, "后端", ["T01"], 3);
+    push(b, `${f}：页面与交互`, "前端", [a], 4);
+    push(c, `${f}：用例与回归测试`, "测试", [b], 5);
+  });
+
+  const tails = out.filter(t => t.name.includes("测试")).map(t => t.id);
+  push("T90", "联调：三个功能串起来走一遍", "前端", tails, 6);
+  push("T91", "验收清单与上线检查", "产品", ["T90"], 7);
+
+  return { list: out, source: "规则" };
+}
+
+/* 模拟模型返回：离线也能演示“模型拆出来长什么样” */
+function mockParse() {
+  return new Promise(resolve => {
+    setTimeout(() => resolve({ list: JSON.parse(JSON.stringify(SAMPLE_LLM_JSON)), source: "模拟模型" }), 900);
+  });
+}
+
+/* 真调大模型：OpenAI 兼容接口 /chat/completions */
+async function llmParse() {
+  const base = $("apiBase").value.trim().replace(/\/+$/, "");
+  const key = $("apiKey").value.trim();
+  const model = $("apiModel").value.trim();
+  if (!key) throw new Error("还没填 API Key");
+
+  const sys = `你是一个产品经理。把用户给的设计规格拆成开发任务，只输出 JSON 数组，不要解释、不要代码块。
+每个任务对象字段：
+id: "T01" 这种编号；
+name: 任务名，一句话，带模块名；
+role: 只能是 架构/后端/前端/测试/产品/主持人 之一；
+deps: 前置任务 id 数组，没有就空数组；
+priority: 数字，越小越先做，1 到 9；
+kind: 普通任务不写，若这个任务必须由人确认才写 "human"。
+要求：一个任务是一个能单独验收的产出，不要按函数拆；必须有一个 "human" 的设计确认任务；依赖不能成环。`;
+
+  const user = "设计规格：\n" + $("spec").value;
+
+  const resp = await fetch(base + "/chat/completions", {
+    method: "POST",
+    headers: { "Content-Type": "application/json", "Authorization": "Bearer " + key },
+    body: JSON.stringify({
+      model,
+      temperature: 0.2,
+      messages: [{ role: "system", content: sys }, { role: "user", content: user }]
+    })
+  });
+  if (!resp.ok) {
+    const t = await resp.text();
+    throw new Error("接口返回 " + resp.status + "：" + t.slice(0, 120));
+  }
+  const data = await resp.json();
+  const text = data.choices && data.choices[0] && data.choices[0].message
+    ? data.choices[0].message.content : "";
+  const json = extractJson(text);
+  if (!json) throw new Error("模型没返回能解析的 JSON");
+  return { list: json, source: "大模型(" + model + ")" };
+}
+
+function extractJson(text) {
+  if (!text) return null;
+  let t = text.trim().replace(/^```(json)?/i, "").replace(/```$/, "").trim();
+  const a = t.indexOf("["), b = t.lastIndexOf("]");
+  if (a === -1 || b === -1) return null;
+  try { return JSON.parse(t.slice(a, b + 1)); } catch (e) { return null; }
+}
+
+/* 归一化：补编号、删不存在的依赖、断环、保证有人工卡点 */
+function normalize(raw) {
+  const out = [];
+  const ids = new Set();
+  raw.forEach((t, i) => {
+    const id = String(t.id || ("T" + String(i + 1).padStart(2, "0"))).toUpperCase();
+    ids.add(id);
+    out.push({
+      id,
+      name: String(t.name || t.title || "任务").slice(0, 40),
+      role: String(t.role || "后端"),
+      deps: (Array.isArray(t.deps) ? t.deps : []).map(d => String(d).toUpperCase()),
+      prio: Number(t.priority || t.prio || i + 1),
+      kind: t.kind === "human" ? "human" : "auto",
+      status: "idle", tick: 0, reason: ""
+    });
+  });
+
+  out.forEach(t => { t.deps = t.deps.filter(d => d !== t.id && ids.has(d)); });
+
+  if (!out.some(t => t.kind === "human")) {
+    const root = out.find(t => !t.deps.length) || out[0];
+    const idx = out.indexOf(root) + 1;
+    out.splice(idx, 0, {
+      id: root.id + "H", name: "设计确认（人工卡点）", role: "主持人",
+      deps: [root.id], prio: (root.prio || 1) + 0.5, kind: "human",
+      status: "idle", tick: 0, reason: ""
+    });
+  }
+
+  // 环检查：有环就把“参与环的那条依赖”删掉，并记一笔
+  let broke = 0;
+  for (let guard = 0; guard < out.length; guard++) {
+    const indeg = {}, adj = {};
+    out.forEach(t => { indeg[t.id] = t.deps.length; adj[t.id] = []; });
+    out.forEach(t => t.deps.forEach(d => { if (adj[d]) adj[d].push(t.id); }));
+    const q = out.filter(t => indeg[t.id] === 0).map(t => t.id);
+    let seen = 0;
+    while (q.length) { const c = q.shift(); seen++; adj[c].forEach(n => { if (--indeg[n] === 0) q.push(n); }); }
+    if (seen === out.length) break;
+    const victim = out.find(t => t.deps.length);
+    if (!victim) break;
+    victim.deps = []; broke++;
+  }
+  return { list: out, broke };
+}
+
+async function parseSpec() {
+  const mode = $("mode").value;
+  setBusy(true);
+  try {
+    let res;
+    if (mode === "llm") res = await llmParse();
+    else if (mode === "mock") res = await mockParse();
+    else res = ruleParse();
+
+    const norm = normalize(res.list);
+    tasks = norm.list;
+
+    log(`拆任务方式：${res.source}，拿到 ${tasks.length} 个任务`, "ok");
+    if (norm.broke) log(`模型给的依赖里有环，编排器砍掉 ${norm.broke} 条兜底`, "warnc");
+    log("拆分口径：一个任务 = 一个能单独验收的产出，不按函数拆", "");
+    render();
+    $("btnPlan").disabled = false;
+    $("btnPlan").focus();
+  } catch (e) {
+    log("调用模型失败：" + e.message, "errc");
+    log("自动退回规则解析，保证演示不断", "warnc");
+    const norm = normalize(ruleParse().list);
+    tasks = norm.list;
+    render();
+    $("btnPlan").disabled = false;
+  } finally {
+    setBusy(false);
+  }
+}
+
+/* ---------- ② 编排器：校验 + 就绪 + 排序 ---------- */
+function plan() {
+  // 1. 环检查（拓扑排序）
+  const inDeg = {}, adj = {};
+  tasks.forEach(t => { inDeg[t.id] = t.deps.length; adj[t.id] = []; });
+  tasks.forEach(t => t.deps.forEach(d => { if (adj[d]) adj[d].push(t.id); }));
+  const q = tasks.filter(t => inDeg[t.id] === 0).map(t => t.id);
+  let seen = 0;
+  while (q.length) {
+    const cur = q.shift(); seen++;
+    adj[cur].forEach(n => { if (--inDeg[n] === 0) q.push(n); });
+  }
+  if (seen !== tasks.length) { log("依赖有环，编排器拒绝生成计划", "errc"); return; }
+
+  log(`依赖检查通过：${tasks.length} 个任务、${tasks.reduce((s, t) => s + t.deps.length, 0)} 条依赖，没有环`, "ok");
+  log(`并发槽设为 ${CONCURRENCY}；排序按 优先级 → 前置已完成 → 编号`, "");
+  log("黑板已建立：每个任务的结果只能写进自己的那一格", "");
+
+  tasks.forEach(t => { t.status = t.deps.length ? "idle" : "ready"; });
+  render();
+  $("btnRun").disabled = false;
+  $("btnFault").disabled = false;
+  $("btnPlan").disabled = true;
+}
+
+/* ---------- ③ 执行 ---------- */
+function canRun(t) {
+  return t.deps.every(d => {
+    const dep = tasks.find(x => x.id === d);
+    return dep && dep.status === "done";
+  });
+}
+
+function tick() {
+  if (waitingHuman) return;
+
+  // 运行中的任务推进
+  tasks.filter(t => t.status === "running").forEach(t => {
+    t.tick++;
+    if (t.tick >= 2) {
+      t.status = "done"; t.tick = 0;
+      log(`门禁通过：${t.id} ${t.name}（产出完整、格式对）`, "ok");
+    }
+  });
+
+  // 派新活
+  const runningCount = tasks.filter(t => t.status === "running").length;
+  let slots = CONCURRENCY - runningCount;
+  const candidates = tasks.filter(t => t.status !== "done" && t.status !== "running" &&
+                                         t.status !== "blocked" && t.status !== "human" && canRun(t));
+  candidates.sort((x, y) => x.prio - y.prio || x.id.localeCompare(y.id));
+
+  for (const t of candidates) {
+    if (slots <= 0) break;
+    if (t.kind === "human") {
+      t.status = "human"; waitingHuman = true;
+      $("confirmBar").style.display = "block";
+      log(`卡住了：${t.id} ${t.name}，编排器暂停派活，等人确认`, "warnc");
+      break;
+    }
+    t.status = "running"; t.tick = 0; slots--;
+    log(`派发：${t.id} ${t.name} → ${t.role}`, "");
+  }
+
+  render();
+  updateCounters();
+
+  if (tasks.every(t => t.status === "done")) {
+    stop();
+    log("全部任务完成，流程结束（可以拿去验收了）", "ok");
+  }
+}
+
+function updateCounters() {
+  $("cTotal").textContent = tasks.length;
+  $("cDone").textContent = tasks.filter(t => t.status === "done").length;
+  $("cReady").textContent = tasks.filter(t => ["ready", "running"].includes(t.status) ||
+                                              (t.status === "idle" && canRun(t))).length;
+  $("cBlock").textContent = tasks.filter(t => t.status === "blocked").length;
+}
+
+function start() {
+  if (running) return;
+  running = true;
+  $("btnRun").disabled = true; $("btnPause").disabled = false;
+  timer = setInterval(tick, 700);
+  log("开始执行：编排器每 0.7 秒看一次状态", "");
+  tick();
+}
+
+function stop() {
+  running = false;
+  if (timer) { clearInterval(timer); timer = null; }
+  $("btnRun").disabled = false; $("btnPause").disabled = true;
+}
+
+function pause() {
+  stop();
+  log("手动暂停：在跑的任务做完就停，不再派新的", "warnc");
+}
+
+/* ---------- 异常与恢复 ---------- */
+function injectFault() {
+  if (faultUsed) { log("这次演示只注入一次异常，已经用掉了", "warnc"); return; }
+  let target = tasks.find(t => t.status === "running");
+  if (!target) target = tasks.find(t => t.status === "ready") || tasks.find(t => t.status === "idle");
+  if (!target) return;
+  target.status = "blocked";
+  target.reason = "上游设计稿从 v1.1 改成 v1.2，这次拿到的输入版本不一致";
+  faultUsed = true;
+  $("btnRetry").disabled = false;
+  log(`异常：${target.id} ${target.name} 卡住了 —— ${target.reason}`, "errc");
+  log("编排器处理：不往下派，等人或等重试；下游继续等着，不会假装完成", "warnc");
+  render(); updateCounters();
+}
+
+function retry() {
+  const blocked = tasks.filter(t => t.status === "blocked");
+  if (!blocked.length) return;
+  blocked.forEach(t => {
+    t.status = "ready"; t.reason = "";
+    log(`重试：${t.id} 重新取到最新输入版本 v1.2，放回就绪队列`, "ok");
+  });
+  $("btnRetry").disabled = true;
+  render(); updateCounters();
+}
+
+function confirmHuman() {
+  const t = tasks.find(x => x.status === "human");
+  if (!t) return;
+  t.status = "done";
+  waitingHuman = false;
+  $("confirmBar").style.display = "none";
+  log(`人工确认通过：${t.id}，记录确认人 = 主持人，时间已写入事件日志`, "ok");
+  render(); updateCounters();
+}
+
+/* ---------- 渲染 ---------- */
+function render() {
+  const rows = $("taskRows");
+  if (!tasks.length) return;
+  rows.innerHTML = tasks.map(t => {
+    const s = STATUS[t.status];
+    const dep = t.deps.length ? t.deps.join(",") : "—";
+    const tip = t.reason ? `<div style="color:#b91c1c;font-size:11px">${t.reason}</div>` : "";
+    return `<tr>
+      <td>${t.id}</td>
+      <td>${t.name}${tip}</td>
+      <td>${t.role}</td>
+      <td>${dep}</td>
+      <td><span class="tag ${s.cls}">${s.text}</span></td>
+    </tr>`;
+  }).join("");
+  drawDag();
+}
+
+function drawDag() {
+  const svg = $("dag");
+  const padX = 12, padY = 14, nodeW = 62, nodeH = 22, gapX = 10, rowH = 32;
+
+  const level = {};
+  function lv(id) {
+    if (level[id] !== undefined) return level[id];
+    const t = tasks.find(x => x.id === id);
+    if (!t || !t.deps.length) { level[id] = 0; return 0; }
+    level[id] = Math.max(...t.deps.map(d => lv(d))) + 1;
+    return level[id];
+  }
+  tasks.forEach(t => lv(t.id));
+  const maxLv = Math.max(...Object.values(level), 0);
+  const byLv = {};
+  tasks.forEach(t => { (byLv[level[t.id]] = byLv[level[t.id]] || []).push(t); });
+
+  const cols = maxLv + 1;
+  const W = Math.max(520, padX * 2 + cols * (nodeW + gapX));
+  const rowsMax = Math.max(...Object.values(byLv).map(a => a.length));
+  const H = Math.max(180, padY * 2 + rowsMax * rowH);
+
+  svg.setAttribute("viewBox", `0 0 ${W} ${H}`);
+  svg.setAttribute("height", H);
+
+  const colW = (W - padX * 2) / cols;
+  const pos = {};
+  for (let l = 0; l < cols; l++) {
+    const arr = byLv[l] || [];
+    const top = (H - arr.length * rowH) / 2 + padY / 2;
+    arr.forEach((t, i) => {
+      pos[t.id] = {
+        x: padX + l * colW + (colW - nodeW) / 2,
+        y: top + i * rowH
+      };
+    });
+  }
+
+  let out = "";
+  tasks.forEach(t => t.deps.forEach(d => {
+    const q = pos[d], c = pos[t.id];
+    if (!q || !c) return;
+    const x1 = q.x + nodeW, y1 = q.y + nodeH / 2;
+    const x2 = c.x, y2 = c.y + nodeH / 2;
+    const mx = (x1 + x2) / 2;
+    out += `<path d="M${x1},${y1} C${mx},${y1} ${mx},${y2} ${x2},${y2}"
+             fill="none" stroke="#c9d6e6" stroke-width="1"/>`;
+  }));
+
+  tasks.forEach(t => {
+    const p = pos[t.id];
+    if (!p) return;
+    const st = STATUS[t.status];
+    out += `<rect x="${p.x}" y="${p.y}" rx="4" width="${nodeW}" height="${nodeH}"
+             fill="${st.color}" stroke="#b9c8dc" stroke-width="0.7"/>`;
+    out += `<text x="${p.x + nodeW / 2}" y="${p.y + 14.5}" text-anchor="middle"
+             font-size="9" fill="#243447">${t.id}</text>`;
+  });
+  svg.innerHTML = out;
+}
+
+/* ---------- 绑定 ---------- */
+$("btnParse").onclick = () => parseSpec().catch(e => log("意外错误：" + e.message, "errc"));
+$("btnPlan").onclick = plan;
+$("btnRun").onclick = start;
+$("btnPause").onclick = pause;
+$("btnFault").onclick = injectFault;
+$("btnRetry").onclick = retry;
+$("btnConfirm").onclick = confirmHuman;
+$("btnReset").onclick = () => location.reload();
+
+/* 导入设计规格文件（.txt / .md） */
+$("btnImport").onclick = () => $("specFile").click();
+$("specFile").onchange = (e) => {
+  const f = e.target.files && e.target.files[0];
+  if (!f) return;
+  const reader = new FileReader();
+  reader.onload = () => {
+    const text = String(reader.result || "");
+    $("spec").value = text;
+    log(`已导入设计规格：${f.name}（${text.length} 字），可以直接点“① 拆任务”`, "ok");
+    e.target.value = "";
+  };
+  reader.onerror = () => log("这个文件读不了，换个 .txt 试试", "errc");
+  reader.readAsText(f, "utf-8");
+};
+</script>
+</body>
+</html>

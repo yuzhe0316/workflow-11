@@ -1,0 +1,18 @@
+﻿# 系统与编辑器
+.DS_Store
+Thumbs.db
+desktop.ini
+~$*
+.vscode/
+.idea/
+
+# 压缩包与临时文件
+*.zip
+*.rar
+*.7z
+*.tmp
+*.bak
+
+# 原型本地设置（如自行添加）
+.env
+api_key.txt
